@@ -3,9 +3,7 @@ import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pytgcalls import PyTgCalls
-from pytgcalls.types import Update
-from pytgcalls.types.input_stream import InputAudioStream
-from pytgcalls.types.input_stream.quality import HighQualityAudio
+from pytgcalls.types import Update, MediaStream
 from dotenv import load_dotenv
 from queue_manager import MusicQueue
 from downloader import search_youtube, download_audio
@@ -16,16 +14,10 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Pyrogram client (user session uchun)
 user_client = Client("user_session", api_id=API_ID, api_hash=API_HASH)
-
-# Bot client
 bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-
-# PyTgCalls instance
 call_py = PyTgCalls(user_client)
 
-# Har bir chat uchun queue
 queues = {}
 
 
@@ -62,7 +54,6 @@ async def play_cmd(client, message: Message):
     status_msg = await message.reply_text(f"🔍 **Qidirilmoqda:** `{query}`...")
 
     try:
-        # YouTube dan qidirish
         result = await search_youtube(query)
         if not result:
             await status_msg.edit_text("❌ Qo'shiq topilmadi!")
@@ -70,7 +61,6 @@ async def play_cmd(client, message: Message):
 
         await status_msg.edit_text(f"⬇️ **Yuklanmoqda:** `{result['title']}`...")
 
-        # Audio yuklash
         file_path = await download_audio(result["url"])
         if not file_path:
             await status_msg.edit_text("❌ Yuklab bo'lmadi!")
@@ -82,7 +72,6 @@ async def play_cmd(client, message: Message):
             "url": result["url"],
             "file": file_path,
             "duration": result["duration"],
-            "thumbnail": result.get("thumbnail", ""),
             "requested_by": message.from_user.first_name,
         }
 
@@ -105,10 +94,7 @@ async def play_track(chat_id, track, message=None):
     try:
         await call_py.join_group_call(
             chat_id,
-            InputAudioStream(
-                track["file"],
-                HighQualityAudio(),
-            ),
+            MediaStream(track["file"]),
         )
 
         text = (
@@ -131,7 +117,10 @@ async def play_track(chat_id, track, message=None):
 
     except Exception as e:
         if message:
-            await message.edit_text(f"❌ Videochatga ulanib bo'lmadi: {str(e)}\n\nVideochatni boshlang va qayta urinib ko'ring.")
+            await message.edit_text(
+                f"❌ Videochatga ulanib bo'lmadi: {str(e)}\n\n"
+                "Videochatni boshlang va qayta urinib ko'ring."
+            )
 
 
 @bot.on_message(filters.command("pause"))
@@ -170,8 +159,7 @@ async def skip_cmd(client, message: Message):
 @bot.on_message(filters.command("stop"))
 async def stop_cmd(client, message: Message):
     chat_id = message.chat.id
-    queue = get_queue(chat_id)
-    queue.clear()
+    get_queue(chat_id).clear()
     try:
         await call_py.leave_group_call(chat_id)
         await message.reply_text("⏹ **Musiqa to'xtatildi va navbat tozalandi**")
@@ -210,7 +198,6 @@ async def search_cmd(client, message: Message):
             await status_msg.edit_text("❌ Hech narsa topilmadi")
             return
 
-        # Agar bitta natija qaytsa
         if isinstance(results, dict):
             results = [results]
 
@@ -229,7 +216,6 @@ async def search_cmd(client, message: Message):
         await status_msg.edit_text(f"❌ Xatolik: {str(e)}")
 
 
-# Callback query handler (inline tugmalar)
 @bot.on_callback_query()
 async def callback_handler(client, callback_query):
     data = callback_query.data
@@ -238,11 +224,9 @@ async def callback_handler(client, callback_query):
     if data == "pause":
         await call_py.pause_stream(chat_id)
         await callback_query.answer("⏸ To'xtatildi")
-
     elif data == "resume":
         await call_py.resume_stream(chat_id)
         await callback_query.answer("▶️ Davom ettirildi")
-
     elif data == "skip":
         queue = get_queue(chat_id)
         queue.next()
@@ -251,25 +235,17 @@ async def callback_handler(client, callback_query):
         else:
             await call_py.leave_group_call(chat_id)
         await callback_query.answer("⏭ O'tkazildi")
-
     elif data == "stop":
         get_queue(chat_id).clear()
         await call_py.leave_group_call(chat_id)
         await callback_query.answer("⏹ To'xtatildi")
 
-    elif data.startswith("play_"):
-        url = data[5:]
-        await callback_query.answer("▶️ Qo'shilmoqda...")
-        # play_cmd ga o'xshash logika
 
-
-# Stream tugaganda keyingisiga o'tish
 @call_py.on_stream_end()
 async def on_stream_end(_, update: Update):
     chat_id = update.chat_id
     queue = get_queue(chat_id)
     queue.next()
-
     if not queue.is_empty():
         track = queue.current()
         await play_track(chat_id, track)
